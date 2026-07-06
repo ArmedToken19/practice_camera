@@ -149,7 +149,7 @@ func loadConfig(filePath string) AppConfig {
 }
 
 func main() {
-	const configPath = "settings.ini"
+	const configPath = "settings.ini.example"
 	savedSettings := loadConfig(configPath)
 	fileName = flag.String("f", "", "Путь к файлу для обработки")
 	flag.Parse()
@@ -223,7 +223,7 @@ func main() {
 			Camera:     cameraChose.Selected,
 			Resolution: resChose.Selected,
 		}
-		saveConfig("settings.ini", currentSettings)
+		saveConfig("settings.ini.example", currentSettings)
 	})
 
 	menu := fyne.NewMenu("Режимы", cameraBtn, settingsBtn)
