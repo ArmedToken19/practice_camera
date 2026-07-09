@@ -7,6 +7,7 @@ import (
 	"image/draw"
 	"image/jpeg"
 	"log"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -86,7 +87,7 @@ func okBtnPress() {
 	mu.Lock()
 	if capturedFrame == nil {
 		mu.Unlock()
-		fmt.Println("Ошибка: Сначала нажмите кнопку 'Захват'")
+		slog.Error("Сначала нажмите кнопку Захват")
 		return
 	}
 	imgToSave := capturedFrame
@@ -94,7 +95,7 @@ func okBtnPress() {
 
 	file, err := os.Create(*fileName)
 	if err != nil {
-		log.Println("Ошибка создания файла:", err)
+		slog.Error("Ошибка создания файла:", err)
 		return
 	}
 	defer file.Close()
@@ -102,7 +103,7 @@ func okBtnPress() {
 
 	err = jpeg.Encode(file, imgToSave, nil)
 	if err != nil {
-		log.Println("Ошибка кодирования JPEG:", err)
+		slog.Error("Ошибка кодирования JPEG:", err)
 		return
 	}
 
@@ -155,12 +156,12 @@ func main() {
 	flag.Parse()
 
 	if *fileName == "" {
-		fmt.Println("Ошибка: Укажите файл")
+		slog.Error("Ошибка: не указан файл")
 		return
 	}
 
 	myApp := app.New()
-	myWindow = myApp.NewWindow("Практика1")
+	myWindow = myApp.NewWindow("Проверка камеры")
 	myWindow.Resize(fyne.NewSize(1280, 720))
 
 	width := 640
@@ -168,7 +169,7 @@ func main() {
 
 	_, err := fmt.Sscanf(savedSettings.Resolution, "%dx%d", &width, &height)
 	if err != nil {
-		log.Println("Не удалось распознать разрешение из конфига, использован дефолт", err)
+		slog.Info("Не удалось распознать разрешение из конфига, использован дефолт", err)
 		width = 640
 		height = 480
 	}
@@ -241,7 +242,7 @@ func main() {
 		for {
 			frame, release, err := videoReader.Read()
 			if err != nil {
-				log.Println("Ошибка чтения потока камеры:", err)
+				slog.Error("Ошибка чтения потока камеры:", err)
 				if release != nil {
 					release()
 				}
