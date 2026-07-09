@@ -1,3 +1,0 @@
-[Media]
-Camera     = `@device:pnp:\\?\usb#vid_0408&pid_403a&mi_00#6&2191a7a5&0&0000#{65e8773d-8f56-11d0-a3b9-00a0c9223196}\global`
-Resolution = 1280x720

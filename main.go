@@ -1,12 +1,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"image"
 	"image/draw"
 	"image/jpeg"
-	"log"
 	"log/slog"
 	"os"
 	"sync"
@@ -16,6 +16,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/pion/mediadevices"
@@ -87,7 +88,8 @@ func okBtnPress() {
 	mu.Lock()
 	if capturedFrame == nil {
 		mu.Unlock()
-		slog.Error("Сначала нажмите кнопку Захват")
+		slog.Warn("Сначала нажмите кнопку Захват")
+		dialog.ShowInformation("Внимание", "Сначала нажмите кнопку Захват!", myWindow)
 		return
 	}
 	imgToSave := capturedFrame
@@ -95,7 +97,8 @@ func okBtnPress() {
 
 	file, err := os.Create(*fileName)
 	if err != nil {
-		slog.Error("Ошибка создания файла:", err)
+		slog.Error("Ошибка создания файла:", "error ", err)
+		dialog.ShowInformation("Ошибка", "Ошибка создания файла", myWindow)
 		return
 	}
 	defer file.Close()
@@ -103,7 +106,8 @@ func okBtnPress() {
 
 	err = jpeg.Encode(file, imgToSave, nil)
 	if err != nil {
-		slog.Error("Ошибка кодирования JPEG:", err)
+		slog.Error("Ошибка кодирования JPEG:", "error ", err)
+		dialog.ShowInformation("Ошибка", "Ошибка кодирования JPEG", myWindow)
 		return
 	}
 
@@ -119,13 +123,15 @@ func saveConfig(configFileName string, settings AppConfig) {
 
 	section, err := cfg.NewSection("Media")
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("Ошибка NewSection", "error ", err)
+		os.Exit(-1)
 	}
 	section.Key("Camera").SetValue(settings.Camera)
 	section.Key("Resolution").SetValue(settings.Resolution)
 	err = cfg.SaveTo(configFileName)
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("Ошибка сохранения конфига", "error ", err)
+		os.Exit(-1)
 	}
 }
 
@@ -139,6 +145,7 @@ func loadConfig(filePath string) AppConfig {
 	}
 	cfg, err := ini.Load(filePath)
 	if err != nil {
+		slog.Warn("Ошибка загрузки конфига: ", "error", err)
 		return defaultConfig
 	}
 	section := cfg.Section("Media")
@@ -150,14 +157,15 @@ func loadConfig(filePath string) AppConfig {
 }
 
 func main() {
-	const configPath = "settings.ini.example"
+	const configPath = "settings.ini"
+	cameraCtx, cameraCancel := context.WithCancel(context.Background())
 	savedSettings := loadConfig(configPath)
 	fileName = flag.String("f", "", "Путь к файлу для обработки")
 	flag.Parse()
 
 	if *fileName == "" {
 		slog.Error("Ошибка: не указан файл")
-		return
+		os.Exit(-1)
 	}
 
 	myApp := app.New()
@@ -169,20 +177,33 @@ func main() {
 
 	_, err := fmt.Sscanf(savedSettings.Resolution, "%dx%d", &width, &height)
 	if err != nil {
-		slog.Info("Не удалось распознать разрешение из конфига, использован дефолт", err)
+		slog.Warn("Не удалось распознать разрешение из конфига, использован дефолт", "error", err)
 		width = 640
 		height = 480
 	}
 
+	devices := mediadevices.EnumerateDevices()
+	targetDeviceID := ""
+
+	for _, device := range devices {
+		if device.Kind == mediadevices.VideoInput && device.Label == savedSettings.Camera {
+			targetDeviceID = device.DeviceID
+			break
+		}
+	}
+
 	stream, err := mediadevices.GetUserMedia(mediadevices.MediaStreamConstraints{
 		Video: func(constraint *mediadevices.MediaTrackConstraints) {
-
 			constraint.Width = prop.Int(width)
 			constraint.Height = prop.Int(height)
+
+			if targetDeviceID != "" {
+				constraint.DeviceID = prop.String(targetDeviceID)
+			}
 		},
 	})
 	if err != nil {
-		log.Fatal("Не удалось открыть камеру:", err)
+		slog.Error("Не удалось открыть камеру:", "error", err)
 	}
 
 	currentTrack = stream.GetVideoTracks()[0]
@@ -203,7 +224,6 @@ func main() {
 	settingsBtn := fyne.NewMenuItem("Настройки", settingsMenu)
 	cameraBtn := fyne.NewMenuItem("Камера", cameraMenu)
 
-	devices := mediadevices.EnumerateDevices()
 	var cameraOptions []string
 	for _, device := range devices {
 		if device.Kind == mediadevices.VideoInput {
@@ -224,7 +244,7 @@ func main() {
 			Camera:     cameraChose.Selected,
 			Resolution: resChose.Selected,
 		}
-		saveConfig("settings.ini.example", currentSettings)
+		saveConfig("settings.ini", currentSettings)
 	})
 
 	menu := fyne.NewMenu("Режимы", cameraBtn, settingsBtn)
@@ -238,11 +258,11 @@ func main() {
 
 	cameraMenu()
 
-	go func() {
+	go func(ctx context.Context) {
 		for {
 			frame, release, err := videoReader.Read()
 			if err != nil {
-				slog.Error("Ошибка чтения потока камеры:", err)
+				slog.Error("Ошибка чтения потока камеры:", "error", err)
 				if release != nil {
 					release()
 				}
@@ -261,7 +281,14 @@ func main() {
 			release()
 			time.Sleep(33 * time.Millisecond)
 		}
-	}()
+	}(cameraCtx)
+
+	myWindow.SetOnClosed(func() {
+		cameraCancel()
+		if currentTrack != nil {
+			currentTrack.Close()
+		}
+	})
 
 	myWindow.ShowAndRun()
 }
