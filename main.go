@@ -111,7 +111,7 @@ func okBtnPress() {
 		return
 	}
 
-	os.Exit(0)
+	myWindow.Close()
 }
 
 func cancelBtnPress() {
@@ -204,6 +204,7 @@ func main() {
 	})
 	if err != nil {
 		slog.Error("Не удалось открыть камеру:", "error", err)
+		os.Exit(-1)
 	}
 
 	currentTrack = stream.GetVideoTracks()[0]
@@ -266,7 +267,8 @@ func main() {
 				if release != nil {
 					release()
 				}
-				break
+				time.Sleep(100 * time.Millisecond)
+				continue
 			}
 
 			mu.Lock()
