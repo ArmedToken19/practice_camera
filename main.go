@@ -97,12 +97,11 @@ func okBtnPress() {
 
 	file, err := os.Create(*fileName)
 	if err != nil {
-		slog.Error("Ошибка создания файла:", "error ", err)
+		slog.Error("Ошибка создания файла:", "error", err)
 		dialog.ShowInformation("Ошибка", "Ошибка создания файла", myWindow)
 		return
 	}
 	defer file.Close()
-	defer currentTrack.Close()
 
 	err = jpeg.Encode(file, imgToSave, nil)
 	if err != nil {
