@@ -49,15 +49,18 @@ var (
 	currentTrack mediadevices.Track
 )
 
+// Структура для конфига
 type AppConfig struct {
 	Camera     string
 	Resolution string
 }
 
+// Функция вывода меню камеры
 func cameraMenu() {
 	myWindow.SetContent(container.NewVBox(videoImage, captureBtn, okBtn, cancelBtn))
 }
 
+// Функция вывода меню настроек
 func settingsMenu() {
 	myWindow.SetContent(container.NewVBox(widget.NewLabel("НАСТРОЙКИ ОБОРУДОВАНИЯ"),
 
@@ -69,13 +72,14 @@ func settingsMenu() {
 		saveBtn))
 }
 
+// Функция события нажатия "Захват"
 func captureBtnPress() {
 	mu.Lock()
 	if liveFrame == nil {
 		mu.Unlock()
 		return
 	}
-
+	// deepcopy изображения
 	bounds := liveFrame.Bounds()
 	rgbaClone := image.NewRGBA(bounds)
 	draw.Draw(rgbaClone, bounds, liveFrame, bounds.Min, draw.Src)
@@ -84,6 +88,7 @@ func captureBtnPress() {
 	mu.Unlock()
 }
 
+// Функция события нажатия "Ок"
 func okBtnPress() {
 	mu.Lock()
 	if capturedFrame == nil {
@@ -105,7 +110,7 @@ func okBtnPress() {
 
 	err = jpeg.Encode(file, imgToSave, nil)
 	if err != nil {
-		slog.Error("Ошибка кодирования JPEG:", "error ", err)
+		slog.Error("Ошибка кодирования JPEG:", "error", err)
 		dialog.ShowInformation("Ошибка", "Ошибка кодирования JPEG", myWindow)
 		return
 	}
@@ -113,30 +118,33 @@ func okBtnPress() {
 	myWindow.Close()
 }
 
+// Функция события нажатия "Отмена"
 func cancelBtnPress() {
 	os.Exit(-1)
 }
 
+// Функция события нажатия "Сохранить настройки"
 func saveConfig(configFileName string, settings AppConfig) {
 	cfg := ini.Empty()
 
 	section, err := cfg.NewSection("Media")
 	if err != nil {
-		slog.Error("Ошибка NewSection", "error ", err)
+		slog.Error("Ошибка NewSection", "error", err)
 		os.Exit(-1)
 	}
 	section.Key("Camera").SetValue(settings.Camera)
 	section.Key("Resolution").SetValue(settings.Resolution)
 	err = cfg.SaveTo(configFileName)
 	if err != nil {
-		slog.Error("Ошибка сохранения конфига", "error ", err)
+		slog.Error("Ошибка сохранения конфига", "error", err)
 		os.Exit(-1)
 	}
 }
 
+// Функция загрузки конфига из settings.ini
 func loadConfig(filePath string) AppConfig {
 	defaultConfig := AppConfig{
-		Camera:     "Встроенная камера",
+		Camera:     "",
 		Resolution: "1280x720",
 	}
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
@@ -203,12 +211,11 @@ func main() {
 	})
 	if err != nil {
 		slog.Error("Не удалось открыть камеру:", "error", err)
+		myApp.Quit()
 		os.Exit(-1)
 	}
 
 	currentTrack = stream.GetVideoTracks()[0]
-
-	defer currentTrack.Close()
 
 	videoTrack := currentTrack.(*mediadevices.VideoTrack)
 	videoReader = videoTrack.NewReader(false)
@@ -250,12 +257,6 @@ func main() {
 	menu := fyne.NewMenu("Режимы", cameraBtn, settingsBtn)
 	mainMenu := fyne.NewMainMenu(menu)
 	myWindow.SetMainMenu(mainMenu)
-	myWindow.SetOnClosed(func() {
-		if currentTrack != nil {
-			currentTrack.Close()
-		}
-	})
-
 	cameraMenu()
 
 	go func(ctx context.Context) {
