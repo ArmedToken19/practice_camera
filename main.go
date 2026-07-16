@@ -28,121 +28,63 @@ import (
 	"gopkg.in/ini.v1"
 )
 
-var (
-	currentSettings AppConfig
-	fileName        *string
-	videoReader     video.Reader
-	liveFrame       image.Image
-	capturedFrame   image.Image
-	mu              sync.Mutex
-	videoImage      *canvas.Image
-
-	captureBtn *widget.Button
-	okBtn      *widget.Button
-	cancelBtn  *widget.Button
-
-	cameraChose *widget.Select
-	resChose    *widget.Select
-	saveBtn     *widget.Button
-
-	myWindow     fyne.Window
-	currentTrack mediadevices.Track
-)
-
-// Структура для конфига
+// Структура, хранящяя настройки приложения
 type AppConfig struct {
 	Camera     string
 	Resolution string
 }
 
-// Функция вывода меню камеры
-func cameraMenu() {
-	myWindow.SetContent(container.NewVBox(videoImage, captureBtn, okBtn, cancelBtn))
+// Основная структура приложения, содержащая все зависимости
+type CameraApp struct {
+	// Настройки
+	configPath    string
+	fileName      *string
+	savedSettings AppConfig
+	currentConfig AppConfig
+
+	// Контекст для управления горутиной
+	cameraCtx    context.Context
+	cameraCancel context.CancelFunc
+
+	// GUI
+	app        fyne.App
+	window     fyne.Window
+	videoImage *canvas.Image
+
+	// Кнопки
+	captureBtn *widget.Button
+	okBtn      *widget.Button
+	cancelBtn  *widget.Button
+	saveBtn    *widget.Button
+
+	// Выпадающие списки
+	cameraChose *widget.Select
+	resChose    *widget.Select
+
+	// Данные камеры
+	videoReader   video.Reader
+	liveFrame     image.Image
+	capturedFrame image.Image
+	currentTrack  mediadevices.Track
+
+	// Синхронизация
+	mu sync.Mutex
 }
 
-// Функция вывода меню настроек
-func settingsMenu() {
-	myWindow.SetContent(container.NewVBox(widget.NewLabel("НАСТРОЙКИ ОБОРУДОВАНИЯ"),
+// Конструктор приложения
+func NewCameraApp() *CameraApp {
+	cameraCtx, cameraCancel := context.WithCancel(context.Background())
 
-		widget.NewLabel("Камера:"),
-		cameraChose,
-
-		widget.NewLabel("Разрешение видео:"),
-		resChose,
-		saveBtn))
-}
-
-// Функция события нажатия "Захват"
-func captureBtnPress() {
-	mu.Lock()
-	if liveFrame == nil {
-		mu.Unlock()
-		return
-	}
-	// deepcopy изображения
-	bounds := liveFrame.Bounds()
-	rgbaClone := image.NewRGBA(bounds)
-	draw.Draw(rgbaClone, bounds, liveFrame, bounds.Min, draw.Src)
-
-	capturedFrame = rgbaClone
-	mu.Unlock()
-}
-
-// Функция события нажатия "Ок"
-func okBtnPress() {
-	mu.Lock()
-	if capturedFrame == nil {
-		mu.Unlock()
-		slog.Warn("Сначала нажмите кнопку Захват")
-		dialog.ShowInformation("Внимание", "Сначала нажмите кнопку Захват!", myWindow)
-		return
-	}
-	imgToSave := capturedFrame
-	mu.Unlock()
-
-	file, err := os.Create(*fileName)
-	if err != nil {
-		slog.Error("Ошибка создания файла:", "error", err)
-		dialog.ShowInformation("Ошибка", "Ошибка создания файла", myWindow)
-		return
-	}
-	defer file.Close()
-
-	err = jpeg.Encode(file, imgToSave, nil)
-	if err != nil {
-		slog.Error("Ошибка кодирования JPEG:", "error", err)
-		dialog.ShowInformation("Ошибка", "Ошибка кодирования JPEG", myWindow)
-		return
-	}
-
-	myWindow.Close()
-}
-
-// Функция события нажатия "Отмена"
-func cancelBtnPress() {
-	os.Exit(-1)
-}
-
-// Функция события нажатия "Сохранить настройки"
-func saveConfig(configFileName string, settings AppConfig) {
-	cfg := ini.Empty()
-
-	section, err := cfg.NewSection("Media")
-	if err != nil {
-		slog.Error("Ошибка NewSection", "error", err)
-		os.Exit(-1)
-	}
-	section.Key("Camera").SetValue(settings.Camera)
-	section.Key("Resolution").SetValue(settings.Resolution)
-	err = cfg.SaveTo(configFileName)
-	if err != nil {
-		slog.Error("Ошибка сохранения конфига", "error", err)
-		os.Exit(-1)
+	return &CameraApp{
+		configPath:   "settings.ini",
+		cameraCtx:    cameraCtx,
+		cameraCancel: cameraCancel,
+		fileName:     flag.String("f", "", "Путь к файлу для обработки"),
 	}
 }
 
-// Функция загрузки конфига из settings.ini
-func loadConfig(filePath string) AppConfig {
+// Загрузка конфига из файла
+func (c *CameraApp) loadConfig(filePath string) AppConfig {
 	defaultConfig := AppConfig{
 		Camera:     "",
 		Resolution: "1280x720",
@@ -163,42 +105,178 @@ func loadConfig(filePath string) AppConfig {
 	}
 }
 
-func main() {
-	const configPath = "settings.ini"
-	cameraCtx, cameraCancel := context.WithCancel(context.Background())
-	savedSettings := loadConfig(configPath)
-	fileName = flag.String("f", "", "Путь к файлу для обработки")
-	flag.Parse()
+// Сохранение конфига в файл
+func (c *CameraApp) saveConfig(configFileName string, settings AppConfig) {
+	cfg := ini.Empty()
 
-	if *fileName == "" {
-		slog.Error("Ошибка: не указан файл")
+	section, err := cfg.NewSection("Media")
+	if err != nil {
+		slog.Error("Ошибка NewSection", "error", err)
 		os.Exit(-1)
 	}
+	section.Key("Camera").SetValue(settings.Camera)
+	section.Key("Resolution").SetValue(settings.Resolution)
+	err = cfg.SaveTo(configFileName)
+	if err != nil {
+		slog.Error("Ошибка сохранения конфига", "error", err)
+		os.Exit(-1)
+	}
+}
 
-	myApp := app.New()
-	myWindow = myApp.NewWindow("Проверка камеры")
-	myWindow.Resize(fyne.NewSize(1280, 720))
+// Обработчик нажатия "Захват"
+func (c *CameraApp) captureBtnPress() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
+	if c.liveFrame == nil {
+		return
+	}
+	// deepcopy изображения
+	bounds := c.liveFrame.Bounds()
+	rgbaClone := image.NewRGBA(bounds)
+	draw.Draw(rgbaClone, bounds, c.liveFrame, bounds.Min, draw.Src)
+
+	c.capturedFrame = rgbaClone
+}
+
+// Обработчик нажатия "Ок"
+func (c *CameraApp) okBtnPress() {
+	c.mu.Lock()
+	if c.capturedFrame == nil {
+		c.mu.Unlock()
+		slog.Warn("Сначала нажмите кнопку Захват")
+		dialog.ShowInformation("Внимание", "Сначала нажмите кнопку Захват!", c.window)
+		return
+	}
+	imgToSave := c.capturedFrame
+	c.mu.Unlock()
+
+	file, err := os.Create(*c.fileName)
+	if err != nil {
+		slog.Error("Ошибка создания файла:", "error", err)
+		dialog.ShowInformation("Ошибка", "Ошибка создания файла", c.window)
+		return
+	}
+	defer file.Close()
+
+	err = jpeg.Encode(file, imgToSave, nil)
+	if err != nil {
+		slog.Error("Ошибка кодирования JPEG:", "error", err)
+		dialog.ShowInformation("Ошибка", "Ошибка кодирования JPEG", c.window)
+		return
+	}
+
+	c.window.Close()
+}
+
+// Обработчик нажатия "Отмена"
+func (c *CameraApp) cancelBtnPress() {
+	os.Exit(-1)
+}
+
+// Меню камеры
+func (c *CameraApp) cameraMenu() {
+	c.window.SetContent(container.NewVBox(
+		c.videoImage,
+		c.captureBtn,
+		c.okBtn,
+		c.cancelBtn,
+	))
+}
+
+// Меню настроек
+func (c *CameraApp) settingsMenu() {
+	c.window.SetContent(container.NewVBox(
+		widget.NewLabel("НАСТРОЙКИ ОБОРУДОВАНИЯ"),
+		widget.NewLabel("Камера:"),
+		c.cameraChose,
+		widget.NewLabel("Разрешение видео:"),
+		c.resChose,
+		c.saveBtn,
+	))
+}
+
+// Сама настройка пользовательского интерфейса
+func (c *CameraApp) setupUI() {
+	// Создаём приложение
+	c.app = app.New()
+	c.window = c.app.NewWindow("Проверка камеры")
+	c.window.Resize(fyne.NewSize(1280, 720))
+
+	// Создаём виджет для видео
+	c.videoImage = canvas.NewImageFromImage(nil)
+	c.videoImage.FillMode = canvas.ImageFillContain
+	c.videoImage.SetMinSize(fyne.NewSize(640, 480))
+
+	// Создаём кнопки
+	c.captureBtn = widget.NewButton("Захват", c.captureBtnPress)
+	c.okBtn = widget.NewButton("OK", c.okBtnPress)
+	c.cancelBtn = widget.NewButton("Отмена", c.cancelBtnPress)
+
+	// Получаем список устройств
+	devices := mediadevices.EnumerateDevices()
+
+	// Подготавливаем список камер
+	var cameraOptions []string
+	for _, device := range devices {
+		if device.Kind == mediadevices.VideoInput {
+			cameraOptions = append(cameraOptions, device.Label)
+		}
+	}
+	if len(cameraOptions) == 0 {
+		cameraOptions = append(cameraOptions, "")
+	}
+
+	// Создаём выпадающие списки
+	c.cameraChose = widget.NewSelect(cameraOptions, func(selected string) {})
+	c.cameraChose.SetSelected(c.savedSettings.Camera)
+
+	resOptions := []string{"640x480", "1280x720", "1920x1080"}
+	c.resChose = widget.NewSelect(resOptions, func(selected string) {})
+	c.resChose.SetSelected(c.savedSettings.Resolution)
+
+	// Кнопка сохранения настроек
+	c.saveBtn = widget.NewButton("Сохранить настройки", func() {
+		c.currentConfig = AppConfig{
+			Camera:     c.cameraChose.Selected,
+			Resolution: c.resChose.Selected,
+		}
+		c.saveConfig(c.configPath, c.currentConfig)
+	})
+
+	// Создаём меню
+	settingsBtn := fyne.NewMenuItem("Настройки", c.settingsMenu)
+	cameraBtn := fyne.NewMenuItem("Камера", c.cameraMenu)
+	menu := fyne.NewMenu("Режимы", cameraBtn, settingsBtn)
+	mainMenu := fyne.NewMainMenu(menu)
+	c.window.SetMainMenu(mainMenu)
+
+	// Отображаем меню камеры по умолчанию со старта
+	c.cameraMenu()
+}
+
+// Инициализация камеры
+func (c *CameraApp) initCamera() error {
 	width := 640
 	height := 480
 
-	_, err := fmt.Sscanf(savedSettings.Resolution, "%dx%d", &width, &height)
+	_, err := fmt.Sscanf(c.savedSettings.Resolution, "%dx%d", &width, &height)
 	if err != nil {
 		slog.Warn("Не удалось распознать разрешение из конфига, использован дефолт", "error", err)
-		width = 640
-		height = 480
 	}
 
+	// Ищем камеру по названию из настроек
 	devices := mediadevices.EnumerateDevices()
 	targetDeviceID := ""
 
 	for _, device := range devices {
-		if device.Kind == mediadevices.VideoInput && device.Label == savedSettings.Camera {
+		if device.Kind == mediadevices.VideoInput && device.Label == c.savedSettings.Camera {
 			targetDeviceID = device.DeviceID
 			break
 		}
 	}
 
+	// Запускаем поток
 	stream, err := mediadevices.GetUserMedia(mediadevices.MediaStreamConstraints{
 		Video: func(constraint *mediadevices.MediaTrackConstraints) {
 			constraint.Width = prop.Int(width)
@@ -210,58 +288,27 @@ func main() {
 		},
 	})
 	if err != nil {
-		slog.Error("Не удалось открыть камеру:", "error", err)
-		myApp.Quit()
-		os.Exit(-1)
+		return err
 	}
 
-	currentTrack = stream.GetVideoTracks()[0]
+	c.currentTrack = stream.GetVideoTracks()[0]
 
-	videoTrack := currentTrack.(*mediadevices.VideoTrack)
-	videoReader = videoTrack.NewReader(false)
+	// Запускаем трек и ридер
+	videoTrack := c.currentTrack.(*mediadevices.VideoTrack)
+	c.videoReader = videoTrack.NewReader(false)
 
-	videoImage = canvas.NewImageFromImage(nil)
-	videoImage.FillMode = canvas.ImageFillContain
-	videoImage.SetMinSize(fyne.NewSize(640, 480))
+	return nil
+}
 
-	captureBtn = widget.NewButton("Захват", captureBtnPress)
-	okBtn = widget.NewButton("OK", okBtnPress)
-	cancelBtn = widget.NewButton("Отмена", cancelBtnPress)
-
-	settingsBtn := fyne.NewMenuItem("Настройки", settingsMenu)
-	cameraBtn := fyne.NewMenuItem("Камера", cameraMenu)
-
-	var cameraOptions []string
-	for _, device := range devices {
-		if device.Kind == mediadevices.VideoInput {
-			cameraOptions = append(cameraOptions, device.Label)
-		}
-	}
-	if len(cameraOptions) == 0 {
-		cameraOptions = append(cameraOptions, "Встроенная камера")
-	}
-
-	cameraChose = widget.NewSelect(cameraOptions, func(selected string) {})
-	cameraChose.SetSelected(savedSettings.Camera)
-	resOptions := []string{"640x480", "1280x720", "1920x1080"}
-	resChose = widget.NewSelect(resOptions, func(selected string) {})
-	resChose.SetSelected(savedSettings.Resolution)
-	saveBtn = widget.NewButton("Сохранить настройки", func() {
-		currentSettings = AppConfig{
-			Camera:     cameraChose.Selected,
-			Resolution: resChose.Selected,
-		}
-		saveConfig("settings.ini", currentSettings)
-	})
-
-	menu := fyne.NewMenu("Режимы", cameraBtn, settingsBtn)
-	mainMenu := fyne.NewMainMenu(menu)
-	myWindow.SetMainMenu(mainMenu)
-	cameraMenu()
-
-	go func(ctx context.Context) {
-		for {
-			frame, release, err := videoReader.Read()
+// Горутина для чтения кадров с камеры
+func (c *CameraApp) readFrames() {
+	for {
+		select {
+		case <-c.cameraCtx.Done():
+			slog.Info("Остановка чтения кадров")
+			return
+		default:
+			frame, release, err := c.videoReader.Read()
 			if err != nil {
 				slog.Error("Ошибка чтения потока камеры:", "error", err)
 				if release != nil {
@@ -271,26 +318,68 @@ func main() {
 				continue
 			}
 
-			mu.Lock()
-			liveFrame = frame
-			mu.Unlock()
+			c.mu.Lock()
+			c.liveFrame = frame
+			c.mu.Unlock()
 
 			fyne.Do(func() {
-				videoImage.Image = frame
-				videoImage.Refresh()
+				c.videoImage.Image = frame
+				c.videoImage.Refresh()
 			})
 
 			release()
 			time.Sleep(33 * time.Millisecond)
 		}
-	}(cameraCtx)
+	}
+}
 
-	myWindow.SetOnClosed(func() {
-		cameraCancel()
-		if currentTrack != nil {
-			currentTrack.Close()
+// Запуск приложения
+func (c *CameraApp) Run() error {
+	// Загружаем настройки
+	c.savedSettings = c.loadConfig(c.configPath)
+
+	// Настраиваем интерфейс
+	c.setupUI()
+
+	// Инициализируем камеры
+	if err := c.initCamera(); err != nil {
+		slog.Error("Не удалось открыть камеру:", "error", err)
+		c.app.Quit()
+		return err
+	}
+
+	// Запускаем горутину чтения кадров
+	go c.readFrames()
+
+	// Закрытие ресурсов при выходе
+	c.window.SetOnClosed(func() {
+		c.cameraCancel()
+		if c.currentTrack != nil {
+			c.currentTrack.Close()
 		}
 	})
 
-	myWindow.ShowAndRun()
+	// Запуск
+	c.window.ShowAndRun()
+	return nil
+}
+
+func main() {
+	// Создаём приложение
+	cameraApp := NewCameraApp()
+
+	// Парсим флаги
+	flag.Parse()
+
+	// Проверяем указан ли файл
+	if *cameraApp.fileName == "" {
+		slog.Error("Ошибка: не указан файл")
+		os.Exit(-1)
+	}
+
+	// Запускаем приложение
+	if err := cameraApp.Run(); err != nil {
+		slog.Error("Ошибка при запуске приложения", "error", err)
+		os.Exit(-1)
+	}
 }
